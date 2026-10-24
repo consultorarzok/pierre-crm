@@ -81,13 +81,15 @@ async function api(action, payload = {}, tries = 2) {
   for (let i = 0; i < tries; i++) {
     const ac = new AbortController(), to = setTimeout(() => ac.abort(), 25000);
     try {
-      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action, ...payload }), signal: ac.signal });
+      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action, token: S.token_s, ...payload }), signal: ac.signal });
+      if (r.status === 401) { lock(); const e = new Error('sesion'); e.auth = true; throw e; }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       if (j && j.error) throw new Error(j.error);
       setLive(true);
       return j;
     } catch (e) {
+      if (e.auth) throw e;
       if (i === tries - 1) { setLive(false); throw e; }
       await new Promise((res) => setTimeout(res, 700));
     } finally { clearTimeout(to); }
@@ -102,7 +104,7 @@ const S = {
   list: { q: '', filtro: 'todos', curso: '', dias: Number(store.get('pierre_dias', '30')), orden: 'recientes', page: 0, size: 50 },
   resumenDias: Number(store.get('pierre_rdias', '30')),
   rows: new Map(), badges: { pagos: 0, derivs: 0 },
-  charts: [], token: 0, openTel: null,
+  charts: [], token: 0, openTel: null, token_s: store.get('pierre_tk'),
 };
 const cacheRows = (rows) => rows.forEach((r) => S.rows.set(r.telefono, { ...(S.rows.get(r.telefono) || {}), ...r }));
 
@@ -524,20 +526,55 @@ $('#refreshBtn').onclick = () => render(true);
 $$('#themeBtn,#themeBtnM').forEach((b) => b.onclick = () => applyTheme(curTheme() === 'dark' ? 'light' : 'dark'));
 $$('#opBtn,#opBtnM').forEach((b) => b.onclick = () => askOp());
 addEventListener('hashchange', route);
-setInterval(() => { if (!document.hidden && !D.tel && pop().hidden && S.view !== 'marca') render(true); }, POLL_MS);
+setInterval(() => { if (S.token_s && !document.hidden && !D.tel && pop().hidden && S.view !== 'marca') render(true); }, POLL_MS);
+
+
+/* ---------- ingreso ---------- */
+function lock(msg) {
+  S.token_s = ''; store.set('pierre_tk', '');
+  if (D.tel) closeDrawer();
+  const it = $('#intro'); it.hidden = false; it.classList.remove('leaving'); document.body.classList.add('locked');
+  if (!lock.mounted && window.PierreWorld) { PierreWorld.mount($('#world')); lock.mounted = true; } else if (window.PierreWorld) PierreWorld.start();
+  $('#lgErr').textContent = msg || '';
+  setTimeout(() => $('#lgUser').focus(), 50);
+}
+function unlock(first) {
+  const it = $('#intro');
+  document.body.classList.remove('locked');
+  if (it.hidden) { route(); return; }
+  it.classList.add('leaving'); route();
+  setTimeout(() => { it.hidden = true; it.classList.remove('leaving'); window.PierreWorld && PierreWorld.stop(); }, first ? 0 : 950);
+}
+$('#lgShow').onclick = () => { const p = $('#lgPass'), show = p.type === 'password'; p.type = show ? 'text' : 'password'; $('#lgShow').textContent = show ? 'Ocultar' : 'Mostrar'; $('#lgShow').setAttribute('aria-pressed', show); $('#lgShow').setAttribute('aria-label', show ? 'Ocultar contraseña' : 'Mostrar contraseña'); };
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const u = $('#lgUser').value.trim(), p = $('#lgPass').value, err = $('#lgErr');
+  $('#lgUser').removeAttribute('aria-invalid'); $('#lgPass').removeAttribute('aria-invalid');
+  if (!u || !p) { err.textContent = !u ? 'Escribí tu usuario.' : 'Escribí tu contraseña.'; (!u ? $('#lgUser') : $('#lgPass')).setAttribute('aria-invalid', 'true'); (!u ? $('#lgUser') : $('#lgPass')).focus(); return; }
+  const btn = $('#lgBtn'); btn.disabled = true; btn.textContent = 'Entrando…'; err.textContent = '';
+  try {
+    const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action: 'login', usuario: u, clave: p }) });
+    const j = await r.json();
+    if (!j.token) { err.textContent = 'El usuario o la contraseña no coinciden. Revisalos y probá de nuevo.'; $('#lgPass').setAttribute('aria-invalid', 'true'); $('#lgPass').select(); return; }
+    S.token_s = j.token; store.set('pierre_tk', j.token); $('#lgPass').value = '';
+    unlock(false);
+  } catch { err.textContent = 'No hay conexión con el servidor. Revisá internet y probá de nuevo.'; }
+  finally { btn.disabled = false; btn.textContent = 'Entrar'; }
+};
+$('#logoutBtn').onclick = () => lock();
 
 /* ---------- arranque ---------- */
 document.documentElement.dataset.theme = store.get('pierre_theme') || '';
 if (!document.documentElement.dataset.theme) delete document.documentElement.dataset.theme;
 buildNav(); paintOp(); applyTheme();
-route();
+if (S.token_s) unlock(true); else lock();
 const RECENT = 30 * 864e5;
 function badges(ders, pays) {
   if (ders) S.badges.derivs = ders.filter((x) => x.atencion !== 'atendido' && Date.now() - new Date(x.created_at) < RECENT).length;
   if (pays) S.badges.pagos = pays.filter((x) => x.atencion !== 'atendido' && Date.now() - new Date(x.ultimo_comprobante_fecha || 0) < RECENT).length; paintNav();
 }
 // badges de las pestañas operativas aunque no se hayan abierto
-Promise.all([api('derivs'), api('list', { filtro: 'comprobante', dias: 0, size: 200 })]).then(([d, p]) => {
+if (S.token_s) Promise.all([api('derivs'), api('list', { filtro: 'comprobante', dias: 0, size: 200 })]).then(([d, p]) => {
   badges(d, p.rows);
 }).catch(() => {});
 })();

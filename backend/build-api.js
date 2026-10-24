@@ -18,7 +18,8 @@ const size = Math.min(Math.max(parseInt(b.size) || 50, 1), 200);
 const dias = Math.min(Math.max(parseInt(b.dias) || 0, 0), 3650);
 const page = Math.max(parseInt(b.page) || 0, 0);
 return [{ json: {
-  action: s(b.action, 20),
+  action: s(b.action, 20), token: s(b.token, 80).replace(/[^a-f0-9]/g, ''),
+  usuario: s(b.usuario, 40).toLowerCase(), clave: s(b.clave, 100),
   p: {
     q: s(b.q, 80), filtro: FIL.includes(b.filtro) ? b.filtro : 'todos', curso: s(b.curso, 60),
     orden: b.orden === 'antiguos' ? 'antiguos' : 'recientes', limit: size, offset: page * size, dias,
@@ -82,10 +83,10 @@ SELECT json_build_object(
 ) AS data`,
 };
 const REPL = {
-  list: '={{ [$json.p.q, $json.p.filtro, $json.p.curso, $json.p.orden, $json.p.limit, $json.p.offset, $json.p.dias] }}',
-  detail: '={{ [$json.p.telefono] }}',
-  save: '={{ [$json.p.telefono, $json.p.nombre, $json.p.atencion, $json.p.por, $json.p.hasNombre, $json.p.hasAtencion] }}',
-  note: '={{ [$json.p.telefono, $json.p.por, $json.p.texto] }}',
+  list: '={{ [$("Parsear").first().json.p.q, $("Parsear").first().json.p.filtro, $("Parsear").first().json.p.curso, $("Parsear").first().json.p.orden, $("Parsear").first().json.p.limit, $("Parsear").first().json.p.offset, $("Parsear").first().json.p.dias] }}',
+  detail: '={{ [$("Parsear").first().json.p.telefono] }}',
+  save: '={{ [$("Parsear").first().json.p.telefono, $("Parsear").first().json.p.nombre, $("Parsear").first().json.p.atencion, $("Parsear").first().json.p.por, $("Parsear").first().json.p.hasNombre, $("Parsear").first().json.p.hasAtencion] }}',
+  note: '={{ [$("Parsear").first().json.p.telefono, $("Parsear").first().json.p.por, $("Parsear").first().json.p.texto] }}',
 };
 const actions = Object.keys(SQL);
 const nodes = [
@@ -95,7 +96,7 @@ const nodes = [
   { id: 'sw', name: 'Accion', type: 'n8n-nodes-base.switch', typeVersion: 3.2, position: [440, 300],
     parameters: { rules: { values: actions.map((a) => ({ renameOutput: true, outputKey: a,
       conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 }, combinator: 'and',
-        conditions: [{ id: a, leftValue: '={{ $json.action }}', rightValue: a, operator: { type: 'string', operation: 'equals' } }] } })) },
+        conditions: [{ id: a, leftValue: '={{ $("Parsear").first().json.action }}', rightValue: a, operator: { type: 'string', operation: 'equals' } }] } })) },
       options: { fallbackOutput: 'extra', renameFallbackOutput: 'desconocida' } } },
   { id: 'rs', name: 'Responder', type: 'n8n-nodes-base.respondToWebhook', typeVersion: 1.1, position: [1000, 300],
     parameters: { respondWith: 'json', responseBody: '={{ $json.data !== undefined ? $json.data : { error: "sin datos" } }}',
@@ -113,6 +114,32 @@ actions.forEach((a, i) => {
   connections[name] = { main: [[{ node: 'Responder', type: 'main', index: 0 }]] };
 });
 connections.Accion.main[actions.length] = [{ node: 'Responder error', type: 'main', index: 0 }];
+
+const P = '$("Parsear").first().json';
+nodes.push(
+  { id: 'iflog', name: 'Es login', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [440, 520],
+    parameters: { conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 }, combinator: 'and',
+      conditions: [{ id: 'l', leftValue: '={{ $json.action }}', rightValue: 'login', operator: { type: 'string', operation: 'equals' } }] }, options: {} } },
+  { id: 'qlogin', name: 'SQL login', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [720, 700], alwaysOutputData: true, onError: 'continueRegularOutput',
+    parameters: { resource: 'database', operation: 'executeQuery', options: { queryReplacement: `={{ [${P}.usuario, ${P}.clave] }}` },
+      query: `WITH u AS (SELECT usuario FROM pierre_crm_usuarios WHERE usuario = $1 AND activo AND pass_hash = extensions.crypt($2, pass_hash)),
+s AS (INSERT INTO pierre_crm_sesiones (token, usuario, expira) SELECT encode(extensions.gen_random_bytes(24), 'hex'), usuario, now() + interval '30 days' FROM u RETURNING token, usuario, expira),
+d AS (DELETE FROM pierre_crm_sesiones WHERE expira < now())
+SELECT COALESCE((SELECT row_to_json(s) FROM s), json_build_object('error', 'credenciales')) AS data` }, credentials: CRED },
+  { id: 'qses', name: 'SQL sesion', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [720, 400], alwaysOutputData: true,
+    parameters: { resource: 'database', operation: 'executeQuery', options: { queryReplacement: `={{ [${P}.token || 'x'] }}` },
+      query: `SELECT EXISTS (SELECT 1 FROM pierre_crm_sesiones WHERE token = $1 AND expira > now()) AS ok` }, credentials: CRED },
+  { id: 'ifses', name: 'Sesion valida', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [940, 400],
+    parameters: { conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 2 }, combinator: 'and',
+      conditions: [{ id: 's', leftValue: '={{ $json.ok }}', rightValue: '', operator: { type: 'boolean', operation: 'true', singleValue: true } }] }, options: {} } },
+  { id: 'r401', name: 'Responder 401', type: 'n8n-nodes-base.respondToWebhook', typeVersion: 1.1, position: [1180, 520],
+    parameters: { respondWith: 'json', responseBody: '={{ { error: "sesion" } }}', options: { responseCode: 401, responseHeaders: { entries: [{ name: 'Access-Control-Allow-Origin', value: '*' }] } } } },
+);
+connections.Parsear = { main: [[{ node: 'Es login', type: 'main', index: 0 }]] };
+connections['Es login'] = { main: [[{ node: 'SQL login', type: 'main', index: 0 }], [{ node: 'SQL sesion', type: 'main', index: 0 }]] };
+connections['SQL login'] = { main: [[{ node: 'Responder', type: 'main', index: 0 }]] };
+connections['SQL sesion'] = { main: [[{ node: 'Sesion valida', type: 'main', index: 0 }]] };
+connections['Sesion valida'] = { main: [[{ node: 'Accion', type: 'main', index: 0 }], [{ node: 'Responder 401', type: 'main', index: 0 }]] };
 
 (async () => {
   const wf = { name: 'Pierre CRM API', nodes, connections, settings: { executionOrder: 'v1' } };
