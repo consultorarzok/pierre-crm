@@ -17,24 +17,30 @@ const FIL = ['todos', 'no_atendido', 'seguimiento', 'atendido', 'comprobante', '
 const size = Math.min(Math.max(parseInt(b.size) || 50, 1), 200);
 const dias = Math.min(Math.max(parseInt(b.dias) || 0, 0), 3650);
 const page = Math.max(parseInt(b.page) || 0, 0);
+/* mes 'AAAA-MM' (hora de Jujuy, UTC-3) o '' = total */
+const mes = /^20\\d\\d-(0[1-9]|1[0-2])$/.test(b.mes) ? b.mes : '';
+let desde = '2000-01-01T00:00:00Z', hasta = '2100-01-01T00:00:00Z';
+if (mes) { const [y, m] = mes.split('-').map(Number); desde = mes + '-01T00:00:00-03:00'; hasta = (m === 12 ? y + 1 : y) + '-' + String(m === 12 ? 1 : m + 1).padStart(2, '0') + '-01T00:00:00-03:00'; }
 return [{ json: {
   action: s(b.action, 20), token: s(b.token, 80).replace(/[^a-f0-9]/g, ''),
   usuario: s(b.usuario, 40).toLowerCase(), clave: s(b.clave, 100),
   p: {
     q: s(b.q, 80), filtro: FIL.includes(b.filtro) ? b.filtro : 'todos', curso: s(b.curso, 60),
-    orden: b.orden === 'antiguos' ? 'antiguos' : 'recientes', limit: size, offset: page * size, dias,
+    orden: b.orden === 'antiguos' ? 'antiguos' : 'recientes', limit: size, offset: page * size, dias, mes, desde, hasta,
     telefono: tel, nombre: s(b.nombre, 80), atencion: ATEN.includes(b.atencion) ? b.atencion : 'no_atendido',
     por: s(b.por, 60), hasNombre: b.nombre !== undefined, hasAtencion: ATEN.includes(b.atencion), texto: s(b.texto, 2000)
   } } }];`;
 
 const SQL = {
-  list: `WITH a AS (SELECT * FROM pierre_crm_v WHERE $7::int = 0 OR ultimo >= now() - ($7::int * interval '1 day')),
+  list: `WITH a0 AS (SELECT * FROM pierre_crm_v v WHERE $7 = '' OR v.telefono IN (SELECT DISTINCT x.telefono FROM pierre_conversaciones x WHERE x.created_at >= $8::timestamptz AND x.created_at < $9::timestamptz)),
+a AS (SELECT a0.*, (estado = 'comprobante_recibido' AND ($7 = '' OR (ultimo_comprobante_fecha >= $8::timestamptz AND ultimo_comprobante_fecha < $9::timestamptz))) AS comp_p,
+  (derivado AND ($7 = '' OR (ult_deriv >= $8::timestamptz AND ult_deriv < $9::timestamptz))) AS der_p FROM a0),
 f AS (SELECT * FROM a WHERE ($1 = '' OR telefono ILIKE '%' || $1 || '%' OR nombre ILIKE '%' || $1 || '%')
-  AND ($2 = 'todos' OR ($2 = 'no_atendido' AND atencion = 'no_atendido') OR ($2 = 'seguimiento' AND atencion = 'seguimiento') OR ($2 = 'atendido' AND atencion = 'atendido') OR ($2 = 'comprobante' AND estado = 'comprobante_recibido') OR ($2 = 'derivado' AND derivado) OR ($2 = 'con_curso' AND curso IS NOT NULL))
+  AND ($2 = 'todos' OR ($2 = 'no_atendido' AND atencion = 'no_atendido') OR ($2 = 'seguimiento' AND atencion = 'seguimiento') OR ($2 = 'atendido' AND atencion = 'atendido') OR ($2 = 'comprobante' AND comp_p) OR ($2 = 'derivado' AND der_p) OR ($2 = 'con_curso' AND curso IS NOT NULL))
   AND ($3 = '' OR curso = $3))
 SELECT json_build_object(
  'total', (SELECT count(*) FROM f),
- 'counts', (SELECT json_build_object('todos', count(*), 'no_atendido', count(*) FILTER (WHERE atencion = 'no_atendido'), 'seguimiento', count(*) FILTER (WHERE atencion = 'seguimiento'), 'atendido', count(*) FILTER (WHERE atencion = 'atendido'), 'comprobante', count(*) FILTER (WHERE estado = 'comprobante_recibido'), 'derivado', count(*) FILTER (WHERE derivado), 'con_curso', count(*) FILTER (WHERE curso IS NOT NULL)) FROM a),
+ 'counts', (SELECT json_build_object('todos', count(*), 'no_atendido', count(*) FILTER (WHERE atencion = 'no_atendido'), 'seguimiento', count(*) FILTER (WHERE atencion = 'seguimiento'), 'atendido', count(*) FILTER (WHERE atencion = 'atendido'), 'comprobante', count(*) FILTER (WHERE comp_p), 'derivado', count(*) FILTER (WHERE der_p), 'con_curso', count(*) FILTER (WHERE curso IS NOT NULL)) FROM a),
  'cursos', (SELECT COALESCE(json_agg(c), '[]'::json) FROM (SELECT curso, count(*) AS n FROM a WHERE curso IS NOT NULL GROUP BY 1 ORDER BY 2 DESC) c),
  'rows', (SELECT COALESCE(json_agg(t), '[]'::json) FROM (
    SELECT f.telefono, f.nombre, f.atencion, f.atendido_por, f.atendido_at, f.estado, f.ultimo_monto, f.concepto_pago, f.ultimo_comprobante_link, f.ultimo_comprobante_fecha, f.curso, f.curso_detectado, f.msgs, f.primero, f.ultimo, f.derivado, f.motivo,
@@ -63,7 +69,8 @@ SELECT row_to_json(r) AS data FROM r`,
   note: `WITH r AS (INSERT INTO pierre_crm_notas (telefono, autor, texto) VALUES ($1, NULLIF($2, ''), $3) RETURNING id, telefono, autor, texto, created_at) SELECT row_to_json(r) AS data FROM r`,
   derivs: `SELECT COALESCE(json_agg(t), '[]'::json) AS data FROM (
  SELECT d.id, d.telefono, COALESCE(NULLIF(k.nombre, ''), NULLIF(NULLIF(d.nombre, 'Sin nombre'), '')) AS nombre, d.motivo, d.origen, d.created_at, COALESCE(k.atencion, 'no_atendido') AS atencion
- FROM pierre_derivaciones d LEFT JOIN pierre_crm_contactos k ON k.telefono = d.telefono ORDER BY d.created_at DESC LIMIT 300) t`,
+ FROM pierre_derivaciones d LEFT JOIN pierre_crm_contactos k ON k.telefono = d.telefono
+ WHERE $1 = '' OR (d.created_at >= $2::timestamptz AND d.created_at < $3::timestamptz) ORDER BY d.created_at DESC LIMIT 1000) t`,
   stats: `WITH a AS (SELECT * FROM pierre_crm_v)
 SELECT json_build_object(
  'total', (SELECT count(*) FROM a),
@@ -76,14 +83,18 @@ SELECT json_build_object(
  'activos_7d', (SELECT count(*) FROM a WHERE ultimo >= now() - interval '7 days'),
  'mensajes_total', (SELECT count(*) FROM pierre_conversaciones),
  'mensajes_7d', (SELECT count(*) FROM pierre_conversaciones WHERE created_at >= now() - interval '7 days'),
- 'diario', (SELECT COALESCE(json_agg(d ORDER BY d.dia), '[]'::json) FROM (SELECT (created_at AT TIME ZONE 'America/Argentina/Jujuy')::date AS dia, count(*) AS mensajes, count(DISTINCT telefono) AS contactos FROM pierre_conversaciones WHERE created_at >= now() - interval '45 days' GROUP BY 1) d),
- 'horas', (SELECT COALESCE(json_agg(x ORDER BY x.hora), '[]'::json) FROM (SELECT extract(hour FROM created_at AT TIME ZONE 'America/Argentina/Jujuy')::int AS hora, count(*) AS n FROM pierre_conversaciones WHERE created_at >= now() - interval '30 days' GROUP BY 1) x),
+ 'mensajes_periodo', (SELECT count(*) FROM pierre_conversaciones WHERE created_at >= $2::timestamptz AND created_at < $3::timestamptz),
+ 'meses', (SELECT COALESCE(json_agg(m ORDER BY m.mes), '[]'::json) FROM (SELECT to_char(created_at AT TIME ZONE 'America/Argentina/Jujuy', 'YYYY-MM') AS mes, count(*) AS mensajes, count(DISTINCT telefono) AS contactos FROM pierre_conversaciones GROUP BY 1) m),
+ 'diario', (SELECT COALESCE(json_agg(d ORDER BY d.dia), '[]'::json) FROM (SELECT (created_at AT TIME ZONE 'America/Argentina/Jujuy')::date AS dia, count(*) AS mensajes, count(DISTINCT telefono) AS contactos FROM pierre_conversaciones WHERE $1 <> '' AND created_at >= $2::timestamptz AND created_at < $3::timestamptz GROUP BY 1) d),
+ 'horas', (SELECT COALESCE(json_agg(x ORDER BY x.hora), '[]'::json) FROM (SELECT extract(hour FROM created_at AT TIME ZONE 'America/Argentina/Jujuy')::int AS hora, count(*) AS n FROM pierre_conversaciones WHERE created_at >= $2::timestamptz AND created_at < $3::timestamptz GROUP BY 1) x),
  'cursos', (SELECT COALESCE(json_agg(c), '[]'::json) FROM (SELECT curso, count(*) AS n FROM a WHERE curso IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 12) c),
  'tipos', (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT tipo_mensaje AS tipo, count(*) AS n FROM pierre_conversaciones GROUP BY 1 ORDER BY 2 DESC) t)
 ) AS data`,
 };
 const REPL = {
-  list: '={{ [$("Parsear").first().json.p.q, $("Parsear").first().json.p.filtro, $("Parsear").first().json.p.curso, $("Parsear").first().json.p.orden, $("Parsear").first().json.p.limit, $("Parsear").first().json.p.offset, $("Parsear").first().json.p.dias] }}',
+  list: '={{ [$("Parsear").first().json.p.q, $("Parsear").first().json.p.filtro, $("Parsear").first().json.p.curso, $("Parsear").first().json.p.orden, $("Parsear").first().json.p.limit, $("Parsear").first().json.p.offset, $("Parsear").first().json.p.mes, $("Parsear").first().json.p.desde, $("Parsear").first().json.p.hasta] }}',
+  derivs: '={{ [$("Parsear").first().json.p.mes, $("Parsear").first().json.p.desde, $("Parsear").first().json.p.hasta] }}',
+  stats: '={{ [$("Parsear").first().json.p.mes, $("Parsear").first().json.p.desde, $("Parsear").first().json.p.hasta] }}',
   detail: '={{ [$("Parsear").first().json.p.telefono] }}',
   save: '={{ [$("Parsear").first().json.p.telefono, $("Parsear").first().json.p.nombre, $("Parsear").first().json.p.atencion, $("Parsear").first().json.p.por, $("Parsear").first().json.p.hasNombre, $("Parsear").first().json.p.hasAtencion] }}',
   note: '={{ [$("Parsear").first().json.p.telefono, $("Parsear").first().json.p.por, $("Parsear").first().json.p.texto] }}',

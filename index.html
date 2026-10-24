@@ -15,20 +15,16 @@
 </head>
 <body>
 <div class="intro" id="intro" hidden>
-  <div class="intro-world" id="world" role="img"></div>
-  <section class="intro-card" aria-labelledby="introTitle">
-    <img class="intro-logo" src="assets/logo-horizontal-blanco.png" alt="Pierre Centro Profesional" width="260">
-    <h1 id="introTitle">Las consultas de Pierre, en un solo lugar</h1>
-    <p>Todo lo que la gente le escribe al agente de WhatsApp: quién preguntó, por qué curso, quién lo atendió.</p>
+  <div class="intro-world" id="world" role="img" aria-label="Pierre Centro Profesional y sus cursos"></div>
+  <section class="intro-card" aria-label="Ingresar al CRM de Pierre">
     <form id="loginForm" novalidate>
-      <label for="lgUser">Usuario</label>
-      <input id="lgUser" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
-      <label for="lgPass">Contraseña</label>
-      <div class="pass"><input id="lgPass" name="password" type="password" autocomplete="current-password" required><button type="button" id="lgShow" aria-label="Mostrar contraseña" aria-pressed="false">Mostrar</button></div>
+      <label class="sr" for="lgUser">Usuario</label>
+      <input id="lgUser" name="username" type="text" placeholder="Usuario" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label class="sr" for="lgPass">Contraseña</label>
+      <div class="pass"><input id="lgPass" name="password" type="password" placeholder="Contraseña" autocomplete="current-password" required><button type="button" id="lgShow" aria-label="Mostrar contraseña" aria-pressed="false">Mostrar</button></div>
       <p class="lg-err" id="lgErr" role="alert"></p>
       <button class="lg-btn" type="submit" id="lgBtn">Entrar</button>
     </form>
-    <small class="intro-foot">¿No tenés usuario? Pedíselo a la administración del instituto.</small>
   </section>
 </div>
 

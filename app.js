@@ -97,12 +97,33 @@ async function api(action, payload = {}, tries = 2) {
 }
 function setLive(ok) { $('#live').classList.toggle('off', !ok); $('#liveTxt').textContent = ok ? 'En vivo' : 'Sin conexión'; }
 
+/* ---------- meses (hora de Jujuy) ---------- */
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function mesActual() { const d = new Date(Date.now() - 3 * 36e5); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`; }
+const mesNombre = (m) => { const [y, n] = m.split('-'); return `${MESES[n - 1]} ${y}`; };
+const cap = (t) => t[0].toUpperCase() + t.slice(1);
+const enPeriodo = () => (S.mes ? `en ${mesNombre(S.mes)}` : 'en total');
+const periodoCorto = () => (S.mes ? cap(mesNombre(S.mes)) : 'Total');
+/* todos los meses desde el primero con datos hasta hoy, en orden */
+function listaMeses() {
+  const hoy = mesActual(), primero = (S.meses && S.meses[0] && S.meses[0].mes) || '2026-04', out = [];
+  let [y, m] = primero.split('-').map(Number);
+  for (let i = 0; i < 240; i++) { const k = `${y}-${String(m).padStart(2, '0')}`; out.push(k); if (k >= hoy) break; m++; if (m > 12) { m = 1; y++; } }
+  return out;
+}
+function periodBar() {
+  const meses = listaMeses(), variosAnios = new Set(meses.map((m) => m.slice(0, 4))).size > 1;
+  const cnt = (m) => { const x = S.meses && S.meses.find((r) => r.mes === m); return x ? Number(x.contactos) : 0; };
+  const chip = (k, l, n) => `<button class="mchip" type="button" data-mes="${k}" aria-pressed="${S.mes === k}">${esc(l)}${n !== null ? `<b>${num(n)}</b>` : ''}</button>`;
+  return `<div class="mesbar" role="group" aria-label="Elegir mes">${meses.map((m) => { const [y, n] = m.split('-'); return chip(m, cap(MESES[n - 1]) + (variosAnios ? ' ' + y : ''), S.meses ? cnt(m) : null); }).join('')}${chip('', 'Total', null)}</div>`;
+}
+
 /* ---------- estado ---------- */
 const S = {
   view: 'resumen',
   op: store.get('pierre_op'),
-  list: { q: '', filtro: 'todos', curso: '', dias: Number(store.get('pierre_dias', '30')), orden: 'recientes', page: 0, size: 50 },
-  resumenDias: Number(store.get('pierre_rdias', '30')),
+  list: { q: '', filtro: 'todos', curso: '', orden: 'recientes', page: 0, size: 50 },
+  mes: store.get('pierre_mes', null) ?? mesActual(), meses: null,
   rows: new Map(), badges: { pagos: 0, derivs: 0 },
   charts: [], token: 0, openTel: null, token_s: store.get('pierre_tk'),
 };
@@ -135,7 +156,7 @@ function buildNav() {
 function paintNav() {
   $$('#nav a,#tabbar a').forEach((a) => { if (a.dataset.v === S.view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   const b = { pagos: S.badges.pagos, derivaciones: S.badges.derivs };
-  $$('[data-b]').forEach((e) => { const n = b[e.dataset.b] || 0; e.hidden = !n; e.textContent = n > 99 ? '99+' : n; e.title = n ? `${n} sin atender en los últimos 30 días` : ''; });
+  $$('[data-b]').forEach((e) => { const n = b[e.dataset.b] || 0; e.hidden = !n; e.textContent = n > 99 ? '99+' : n; e.title = n ? `${n} sin atender este mes` : ''; });
 }
 function paintOp() {
   const n = S.op;
@@ -204,18 +225,17 @@ function cssVar(n) { return getComputedStyle(document.documentElement).getProper
 function killCharts() { S.charts.forEach((c) => c.destroy()); S.charts = []; }
 
 /* ---------- RESUMEN ---------- */
-const PERIODOS = [[7, '7 días'], [30, '30 días'], [90, '90 días'], [0, 'Todo']];
-const periodSel = (id, v) => `<label class="sel-l"><span class="muted">Período</span><select class="sel" id="${id}">${PERIODOS.map(([d, l]) => `<option value="${d}" ${d === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`;
 
 async function viewResumen(tk, silent) {
   const v = $('#view');
   if (!silent) v.innerHTML = `<div class="skeleton" style="height:120px"></div><div class="skeleton" style="height:300px;margin-top:14px"></div>`;
-  const dias = S.resumenDias;
+  const mes = S.mes;
   const [lst, st, der, pay] = await Promise.all([
-    api('list', { dias, size: 1 }), api('stats'),
-    api('list', { filtro: 'derivado', dias: dias || 90, size: 40 }), api('list', { filtro: 'comprobante', dias: dias || 90, size: 40 }),
+    api('list', { mes, size: 1 }), api('stats', { mes }),
+    api('list', { filtro: 'derivado', mes, size: 200 }), api('list', { filtro: 'comprobante', mes, size: 200 }),
   ]);
   if (tk !== S.token) return;
+  S.meses = st.meses;
   const c = lst.counts;
   cacheRows(der.rows); cacheRows(pay.rows);
   const pendDer = der.rows.filter((r) => r.atencion !== 'atendido').sort((x, y) => new Date(y.ult_deriv || 0) - new Date(x.ult_deriv || 0)), pendPay = pay.rows.filter((r) => r.atencion !== 'atendido').sort((x, y) => new Date(y.ultimo_comprobante_fecha || 0) - new Date(x.ultimo_comprobante_fecha || 0));
@@ -227,7 +247,7 @@ async function viewResumen(tk, silent) {
   const seg = [['no_atendido', c.no_atendido], ['seguimiento', c.seguimiento], ['atendido', c.atendido]];
   const maxC = Math.max(1, ...lst.cursos.map((x) => Number(x.n)));
   v.innerHTML = `
-  <div class="rbar">${periodSel('selRes', dias)}<span class="muted" id="resNote">${num(c.todos)} contactos con actividad ${dias ? `en los últimos ${dias} días` : 'en total'}.</span></div>
+  ${periodBar()}<p class="muted per-note" id="resNote">${num(c.todos)} contactos con actividad ${enPeriodo()}.</p>
   <section class="queue" aria-label="Para atender ahora">
     <div class="card"><div class="card-h"><h2>Derivados que esperan al equipo</h2><span>${num(pendDer.length)} sin atender</span></div><div class="card-b">${queue(pendDer, 'No hay derivaciones pendientes.', verDer)}</div>
       <div class="card-f"><a href="#/derivaciones">Ver todos los derivados</a></div></div>
@@ -235,20 +255,25 @@ async function viewResumen(tk, silent) {
       <div class="card-f"><a href="#/pagos">Ver todos los comprobantes</a></div></div>
   </section>
   <section class="strip card" aria-label="Totales del período">${strip.map(([l, n, f, k]) => `<a href="#/contactos" data-filtro="${f}" class="${k}"><b>${num(n)}</b><span>${l}</span></a>`).join('')}</section>
-  <div class="card seg-card"><div class="card-h"><h2>Estado de atención</h2><span>${dias ? `últimos ${dias} días` : 'total'}</span></div><div class="card-b">
+  <div class="card seg-card"><div class="card-h"><h2>Estado de atención</h2><span>${esc(periodoCorto())}</span></div><div class="card-b">
     <div class="stack" role="img" aria-label="No atendidos ${c.no_atendido}, en seguimiento ${c.seguimiento}, atendidos ${c.atendido}">${seg.map(([k, n]) => n ? `<i class="s-${ATEN_CLS[k]}" style="flex:${n}" title="${ATEN[k]}: ${num(n)}"></i>` : '').join('')}</div>
     <div class="legend">${seg.map(([k, n]) => `<span><i class="s-${ATEN_CLS[k]}"></i>${ATEN[k]} <b>${num(n)}</b> (${Math.round((n / total) * 100)}%)</span>`).join('')}</div></div></div>
   <div class="grid2">
-    <div class="card"><div class="card-h"><h2>Mensajes por día</h2><span>últimos 45 días · ${num(st.mensajes_7d)} en la última semana</span></div><div class="card-b"><div class="chart-box"><canvas id="chDia" role="img" aria-label="Mensajes y contactos por día"></canvas></div>
+    <div class="card"><div class="card-h"><h2>${mes ? 'Mensajes por día' : 'Mensajes por mes'}</h2><span>${esc(periodoCorto())} · ${num(st.mensajes_periodo)} mensajes</span></div><div class="card-b"><div class="chart-box"><canvas id="chDia" role="img" aria-label="Mensajes y contactos ${mes ? 'por día' : 'por mes'}"></canvas></div>
       <div class="legend"><span><i style="background:var(--chart-1)"></i>Mensajes</span><span><i style="background:var(--chart-2)"></i>Contactos distintos</span></div></div></div>
-    <div class="card"><div class="card-h"><h2>Cursos más consultados</h2><span>${dias ? `últimos ${dias} días` : 'total'}</span></div><div class="card-b">
+    <div class="card"><div class="card-h"><h2>Cursos más consultados</h2><span>${esc(periodoCorto())}</span></div><div class="card-b">
       ${lst.cursos.length ? `<div class="bars">${lst.cursos.slice(0, 8).map((x) => `<a class="bar-row" href="#/contactos" data-curso="${esc(x.curso)}"><span>${esc(x.curso)}</span><span class="bar-track"><span class="bar-fill" style="width:${(x.n / maxC) * 100}%"></span></span><b>${num(x.n)}</b></a>`).join('')}</div>` : empty('Sin consultas en el período')}</div></div>
   </div>
-  <div class="card" style="margin-top:14px"><div class="card-h"><h2>A qué hora escriben</h2><span>últimos 30 días, hora de Jujuy · para organizar los turnos del equipo</span></div><div class="card-b"><div class="chart-box sm"><canvas id="chHora" role="img" aria-label="Mensajes por hora del día"></canvas></div></div></div>`;
-  $('#selRes').onchange = (e) => { S.resumenDias = Number(e.target.value); store.set('pierre_rdias', S.resumenDias); render(); };
-  drawCharts(st);
+  <div class="card" style="margin-top:14px"><div class="card-h"><h2>A qué hora escriben</h2><span>${esc(periodoCorto())}, hora de Jujuy · para organizar los turnos del equipo</span></div><div class="card-b"><div class="chart-box sm"><canvas id="chHora" role="img" aria-label="Mensajes por hora del día"></canvas></div></div></div>`;
+  drawCharts(st, mes);
 }
-function drawCharts(st) {
+/* todos los días del mes (hasta hoy si es el mes en curso), para que los días sin mensajes se vean en 0 */
+function diasDelMes(mes) {
+  const [y, m] = mes.split('-').map(Number), ult = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const hasta = mes === mesActual() ? Number(new Date(Date.now() - 3 * 36e5).toISOString().slice(8, 10)) : ult;
+  return Array.from({ length: hasta }, (_, i) => `${mes}-${String(i + 1).padStart(2, '0')}`);
+}
+function drawCharts(st, mes) {
   if (typeof Chart === 'undefined') return;
   killCharts();
   const c1 = cssVar('--chart-1'), c2 = cssVar('--chart-2'), ink = cssVar('--ink-3'), grid = cssVar('--line-2');
@@ -256,7 +281,9 @@ function drawCharts(st) {
   const base = { responsive: true, maintainAspectRatio: false, animation: { duration: 500 }, interaction: { mode: 'index', intersect: false },
     plugins: { legend: { display: false }, tooltip: { backgroundColor: '#241530', titleColor: '#fff', bodyColor: '#eadcf2', padding: 10, cornerRadius: 8 } },
     scales: { x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 14 } }, y: { beginAtZero: true, grid: { color: grid }, border: { display: false }, ticks: { precision: 0 } } } };
-  const d = st.diario.map((x) => ({ ...x, l: new Date(x.dia + 'T12:00:00').toLocaleDateString('es-AR', { day: 'numeric', month: 'short' }).replace('.', '') }));
+  const d = mes
+    ? diasDelMes(mes).map((dia) => ({ ...(st.diario.find((x) => x.dia === dia) || { mensajes: 0, contactos: 0 }), l: String(Number(dia.slice(8))) }))
+    : st.meses.map((x) => ({ ...x, l: cap(MESES[Number(x.mes.slice(5)) - 1].slice(0, 3)) + (new Set(st.meses.map((m) => m.mes.slice(0, 4))).size > 1 ? ' ' + x.mes.slice(2, 4) : '') }));
   if ($('#chDia')) S.charts.push(new Chart($('#chDia'), { type: 'bar', data: { labels: d.map((x) => x.l), datasets: [
     { label: 'Mensajes', data: d.map((x) => x.mensajes), backgroundColor: c1, borderRadius: 4, maxBarThickness: 18, order: 2 },
     { type: 'line', label: 'Contactos', data: d.map((x) => x.contactos), borderColor: c2, backgroundColor: c2, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4, tension: .3, order: 1 }] }, options: base }));
@@ -270,18 +297,16 @@ let searchT;
 async function viewContactos(tk, silent) {
   const v = $('#view'), L = S.list;
   if (!silent || !$('#listBox')) {
-    v.innerHTML = `<div class="toolbar">
+    v.innerHTML = `${periodBar()}<div class="toolbar">
       <div class="search">${ico('search', 18)}<input id="q" type="search" placeholder="Buscar por nombre o teléfono" value="${esc(L.q)}" aria-label="Buscar contacto" autocomplete="off"></div>
       <select class="sel" id="fCurso" aria-label="Curso"><option value="">Todos los cursos</option></select>
-      <select class="sel" id="fDias" aria-label="Actividad">${[[7, 'Activos en 7 días'], [30, 'Activos en 30 días'], [90, 'Activos en 90 días'], [0, 'Toda la historia']].map(([d, l]) => `<option value="${d}" ${d === L.dias ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <select class="sel" id="fOrden" aria-label="Orden"><option value="recientes" ${L.orden === 'recientes' ? 'selected' : ''}>Más recientes primero</option><option value="antiguos" ${L.orden === 'antiguos' ? 'selected' : ''}>Más antiguos primero</option></select></div>
       <div class="chips" id="chips" role="group" aria-label="Filtrar por estado"></div><div id="listBox">${skel()}</div>`;
     $('#q').oninput = (e) => { clearTimeout(searchT); searchT = setTimeout(() => { L.q = e.target.value.trim(); L.page = 0; render(true); }, 300); };
     $('#fCurso').onchange = (e) => { L.curso = e.target.value; L.page = 0; render(true); };
-    $('#fDias').onchange = (e) => { L.dias = Number(e.target.value); store.set('pierre_dias', L.dias); L.page = 0; render(true); };
     $('#fOrden').onchange = (e) => { L.orden = e.target.value; L.page = 0; render(true); };
   }
-  const d = await api('list', { q: L.q, filtro: L.filtro, curso: L.curso, dias: L.dias, orden: L.orden, page: L.page, size: L.size });
+  const d = await api('list', { q: L.q, filtro: L.filtro, curso: L.curso, mes: S.mes, orden: L.orden, page: L.page, size: L.size });
   if (tk !== S.token) return;
   cacheRows(d.rows);
   $('#fCurso').innerHTML = `<option value="">Todos los cursos</option>${d.cursos.map((c) => `<option value="${esc(c.curso)}" ${c.curso === L.curso ? 'selected' : ''}>${esc(c.curso)} (${num(c.n)})</option>`).join('')}`;
@@ -292,45 +317,43 @@ async function viewContactos(tk, silent) {
   $('#listBox').innerHTML = d.rows.length
     ? `<div class="card list" role="list"><div class="lhead" aria-hidden="true"><span>Contacto</span><span>Última conversación</span><span>Curso y marcas</span><span>Atención</span><span></span></div>${d.rows.map(rowMain).join('')}</div>
        <div class="pager"><span>Mostrando ${num(from)}–${num(to)} de ${num(d.total)}</span><span class="sp"></span><button class="btn sm" id="pPrev" ${L.page ? '' : 'disabled'}>${ico('left', 15)}Anteriores</button><button class="btn sm" id="pNext" ${to >= d.total ? 'disabled' : ''}>Siguientes${ico('right', 15)}</button></div>`
-    : `<div class="card">${empty(hay ? 'Ningún contacto coincide' : 'Todavía no hay contactos', hay ? 'Probá con otro nombre, quitá filtros o ampliá el período de actividad.' : 'Cuando alguien escriba al agente, aparece acá.')}</div>`;
+    : `<div class="card">${empty(hay ? 'Ningún contacto coincide' : 'Todavía no hay contactos', hay ? 'Probá con otro nombre, quitá filtros o elegí otro mes (o Total).' : 'Cuando alguien escriba al agente, aparece acá.')}</div>`;
   if ($('#pPrev')) { $('#pPrev').onclick = () => { L.page--; render(true); scrollTo({ top: 0 }); }; $('#pNext').onclick = () => { L.page++; render(true); scrollTo({ top: 0 }); }; }
 }
 
 /* ---------- PAGOS ---------- */
 async function viewPagos(tk, silent) {
   const v = $('#view'); if (!silent) v.innerHTML = skel(5);
-  const d = await api('list', { filtro: 'comprobante', dias: 0, size: 200, orden: 'recientes' });
+  const d = await api('list', { filtro: 'comprobante', mes: S.mes, size: 200, orden: 'recientes' });
   if (tk !== S.token) return;
   cacheRows(d.rows);
   const rows = d.rows.slice().sort((a, b) => new Date(b.ultimo_comprobante_fecha || 0) - new Date(a.ultimo_comprobante_fecha || 0));
   const pend = rows.filter((r) => r.atencion !== 'atendido').length;
-  badges(null, rows);
-  v.innerHTML = `<p class="lead-p"><b>${num(pend)}</b> de ${num(d.total)} comprobantes todavía no fueron revisados por el equipo. Abrí cada contacto para ver la conversación y marcarlo como atendido.</p>
-    <div class="card list"><div class="lhead pay" aria-hidden="true"><span>Contacto</span><span>Curso</span><span>Monto y concepto</span><span>Recibido</span><span></span><span>Atención</span></div>${rows.map(rowPay).join('') || empty('No hay comprobantes')}</div>`;
+  if (S.mes === mesActual()) badges(null, rows);
+  v.innerHTML = `${periodBar()}<p class="lead-p"><b>${num(pend)}</b> de ${num(d.total)} comprobantes recibidos ${enPeriodo()} todavía no fueron revisados por el equipo. Abrí cada contacto para ver la conversación y marcarlo como atendido.</p>
+    <div class="card list"><div class="lhead pay" aria-hidden="true"><span>Contacto</span><span>Curso</span><span>Monto y concepto</span><span>Recibido</span><span></span><span>Atención</span></div>${rows.map(rowPay).join('') || empty('No hay comprobantes ' + enPeriodo())}</div>`;
 }
 
 /* ---------- DERIVADOS ---------- */
 async function viewDerivs(tk, silent) {
   const v = $('#view'); if (!silent) v.innerHTML = skel(5);
-  const rows = await api('derivs');
+  const rows = await api('derivs', { mes: S.mes });
   if (tk !== S.token) return;
   rows.forEach((r) => S.rows.set(r.telefono, { ...(S.rows.get(r.telefono) || {}), telefono: r.telefono, nombre: r.nombre || S.rows.get(r.telefono)?.nombre, atencion: r.atencion }));
   const pend = rows.filter((r) => r.atencion !== 'atendido').length;
-  badges(rows, null);
-  v.innerHTML = `<p class="lead-p"><b>${num(pend)}</b> de las últimas ${num(rows.length)} derivaciones siguen sin atender. El agente las genera cuando alguien pide hablar con una persona, anotarse en una lista de espera o consulta algo que no puede resolver.</p>
-    <div class="card list"><div class="lhead der" aria-hidden="true"><span>Contacto</span><span>Motivo</span><span>Derivado</span><span>Atención</span></div>${rows.map(rowDer).join('') || empty('No hay derivaciones')}</div>`;
+  if (S.mes === mesActual()) badges(rows, null);
+  v.innerHTML = `${periodBar()}<p class="lead-p"><b>${num(pend)}</b> de las ${num(rows.length)} derivaciones ${enPeriodo()} siguen sin atender. El agente las genera cuando alguien pide hablar con una persona, anotarse en una lista de espera o consulta algo que no puede resolver.</p>
+    <div class="card list"><div class="lhead der" aria-hidden="true"><span>Contacto</span><span>Motivo</span><span>Derivado</span><span>Atención</span></div>${rows.map(rowDer).join('') || empty('No hay derivaciones ' + enPeriodo())}</div>`;
 }
 
 /* ---------- CURSOS ---------- */
 async function viewCursos(tk, silent) {
   const v = $('#view'); if (!silent) v.innerHTML = skel(5);
-  const dias = S.resumenDias;
-  const d = await api('list', { dias, size: 1 });
+  const d = await api('list', { mes: S.mes, size: 1 });
   if (tk !== S.token) return;
   const max = Math.max(1, ...d.cursos.map((c) => Number(c.n)));
-  v.innerHTML = `<div class="rbar">${periodSel('selCur', dias)}<span class="muted">Un contacto cuenta en el curso que el agente confirmó o, si no hay, en el que se detecta por sus mensajes (aprox.).</span></div>
-    <div class="card"><div class="card-b rank">${d.cursos.length ? d.cursos.map((c, i) => `<a class="rank-row" href="#/contactos" data-curso="${esc(c.curso)}"><span class="rk">${i + 1}</span><span class="nm">${esc(c.curso)}</span><span class="bar-track"><span class="bar-fill ${i === 0 ? 'gold' : ''}" style="width:${(c.n / max) * 100}%"></span></span><b>${num(c.n)}</b><span class="muted go">ver contactos</span></a>`).join('') : empty('Sin consultas en este período')}</div></div>`;
-  $('#selCur').onchange = (e) => { S.resumenDias = Number(e.target.value); store.set('pierre_rdias', S.resumenDias); render(); };
+  v.innerHTML = `${periodBar()}<p class="muted per-note">Un contacto cuenta en el curso que el agente confirmó o, si no hay, en el que se detecta por sus mensajes (aprox.).</p>
+    <div class="card"><div class="card-b rank">${d.cursos.length ? d.cursos.map((c, i) => `<a class="rank-row" href="#/contactos" data-curso="${esc(c.curso)}"><span class="rk">${i + 1}</span><span class="nm">${esc(c.curso)}</span><span class="bar-track"><span class="bar-fill ${i === 0 ? 'gold' : ''}" style="width:${(c.n / max) * 100}%"></span></span><b>${num(c.n)}</b><span class="muted go">ver contactos</span></a>`).join('') : empty('Sin consultas ' + enPeriodo())}</div></div>`;
 }
 
 /* ---------- MARCA ---------- */
@@ -497,7 +520,7 @@ async function render(silent = false) {
   paintNav(); killCharts();
   $('#refreshBtn').classList.add('spin'); banner('');
   const run = { resumen: viewResumen, contactos: viewContactos, pagos: viewPagos, derivaciones: viewDerivs, cursos: viewCursos, marca: async () => viewMarca() }[S.view];
-  try { await run(tk, silent); }
+  try { await run(tk, silent); if (!silent) { const m = $('.mchip[aria-pressed="true"]'), bar = $('.mesbar'); if (m && bar) bar.scrollLeft = m.offsetLeft - bar.offsetLeft - (bar.clientWidth - m.offsetWidth) / 2; } }
   catch (e) { if (tk === S.token) { banner('No se pudieron traer los datos. Revisá la conexión.', () => render()); if (!silent) $('#view').innerHTML = ''; } }
   finally { if (tk === S.token) $('#refreshBtn').classList.remove('spin'); }
 }
@@ -512,8 +535,9 @@ document.addEventListener('click', (e) => {
   const mk = e.target.closest('[data-mark]');
   if (mk) { e.stopPropagation(); setAtencion(mk.dataset.mark, 'atendido'); return; }
   if (e.target.closest('[data-stop]')) { e.stopPropagation(); return; }
-  const f = e.target.closest('[data-filtro]'); if (f) { S.list.filtro = f.dataset.filtro; S.list.curso = ''; S.list.page = 0; S.list.q = ''; S.list.dias = S.resumenDias; store.set('pierre_dias', S.list.dias); }
-  const cu = e.target.closest('[data-curso]'); if (cu) { S.list.curso = cu.dataset.curso; S.list.filtro = 'todos'; S.list.q = ''; S.list.page = 0; S.list.dias = S.resumenDias; store.set('pierre_dias', S.list.dias); }
+  const f = e.target.closest('[data-filtro]'); if (f) { S.list.filtro = f.dataset.filtro; S.list.curso = ''; S.list.page = 0; S.list.q = ''; }
+  const cu = e.target.closest('[data-curso]'); if (cu) { S.list.curso = cu.dataset.curso; S.list.filtro = 'todos'; S.list.q = ''; S.list.page = 0; }
+  const ms = e.target.closest('[data-mes]'); if (ms) { S.mes = ms.dataset.mes; store.set('pierre_mes', S.mes); S.list.page = 0; render(); return; }
   const op = e.target.closest('[data-open]'); if (op && !e.target.closest('a,button.mark')) openDrawer(op.dataset.open, op);
 });
 document.addEventListener('keydown', (e) => {
@@ -568,13 +592,13 @@ document.documentElement.dataset.theme = store.get('pierre_theme') || '';
 if (!document.documentElement.dataset.theme) delete document.documentElement.dataset.theme;
 buildNav(); paintOp(); applyTheme();
 if (S.token_s) unlock(true); else lock();
-const RECENT = 30 * 864e5;
+/* globitos de las pestañas: lo de ESTE mes que sigue sin atender */
 function badges(ders, pays) {
-  if (ders) S.badges.derivs = ders.filter((x) => x.atencion !== 'atendido' && Date.now() - new Date(x.created_at) < RECENT).length;
-  if (pays) S.badges.pagos = pays.filter((x) => x.atencion !== 'atendido' && Date.now() - new Date(x.ultimo_comprobante_fecha || 0) < RECENT).length; paintNav();
+  if (ders) S.badges.derivs = ders.filter((x) => x.atencion !== 'atendido').length;
+  if (pays) S.badges.pagos = pays.filter((x) => x.atencion !== 'atendido').length; paintNav();
 }
 // badges de las pestañas operativas aunque no se hayan abierto
-if (S.token_s) Promise.all([api('derivs'), api('list', { filtro: 'comprobante', dias: 0, size: 200 })]).then(([d, p]) => {
+if (S.token_s) Promise.all([api('derivs', { mes: mesActual() }), api('list', { filtro: 'comprobante', mes: mesActual(), size: 200 })]).then(([d, p]) => {
   badges(d, p.rows);
 }).catch(() => {});
 })();
