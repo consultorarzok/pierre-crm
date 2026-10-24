@@ -464,3 +464,15 @@ body.locked .app, body.locked .tabbar { display:none; }
   .mesbar { flex-wrap:nowrap; overflow-x:auto; margin:0 -14px 10px; padding:2px 14px 6px; scrollbar-width:none; }
   .mchip { flex:none; }
 }
+
+/* ---------- visor de comprobante ---------- */
+.img-dlg { border:0; border-radius:16px; padding:0; width:min(560px,calc(100vw - 32px)); background:var(--surface); color:var(--ink); box-shadow:0 20px 50px rgba(20,6,28,.45); }
+.img-dlg::backdrop { background:rgba(20,6,28,.6); }
+.img-dlg-h { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 12px 18px; border-bottom:1px solid var(--line); }
+.img-dlg img { display:block; max-width:100%; max-height:70vh; margin:14px auto 0; border-radius:10px; }
+.img-dlg p { padding:16px 18px; margin:0; line-height:1.5; }
+.img-dlg p:empty { display:none; }
+.img-dlg .img-gone { color:var(--ink-2); }
+.img-dlg .img-gone b { display:block; color:var(--ink); margin-bottom:4px; }
+.img-dlg #imgDlgOpen { margin:12px 18px 18px; }
+.linklike { border:0; background:none; padding:0; color:var(--primary); font:inherit; text-decoration:underline; cursor:pointer; }

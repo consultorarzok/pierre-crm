@@ -211,7 +211,7 @@ const rowPay = (r) => `<div class="lrow pay" role="button" tabindex="0" data-ope
     <div class="last col-x">${cursoPill(r)}</div>
     <div class="last"><p>${r.ultimo_monto ? esc(r.ultimo_monto) : '<span class="muted">Monto no detectado</span>'}</p><small>${esc(r.concepto_pago || 'Sin concepto')}</small></div>
     <div class="last"><p>${rel(r.ultimo_comprobante_fecha)}</p><small>${r.ultimo_comprobante_fecha ? esc(hhmm(new Date(r.ultimo_comprobante_fecha)) + ' h') : ''}</small></div>
-    <div class="act">${r.ultimo_comprobante_link ? `<a class="btn sm" href="${esc(r.ultimo_comprobante_link)}" target="_blank" rel="noopener" data-stop>${ico('out', 15)}Ver imagen</a>` : '<span class="muted">Sin imagen</span>'}</div>
+    <div class="act">${r.ultimo_comprobante_link ? `<button class="btn sm" type="button" data-img="${esc(r.ultimo_comprobante_link)}">${ico('image', 15)}Ver imagen</button>` : '<span class="muted">Sin imagen</span>'}</div>
     <div class="stline"><span class="pill ${ATEN_CLS[r.atencion || 'no_atendido']}">${ATEN[r.atencion || 'no_atendido']}</span></div></div>`;
 const rowDer = (r) => `<div class="lrow der" role="button" tabindex="0" data-open="${esc(r.telefono)}">
     <div class="who">${avatar(r)}<div class="t">${nameHtml(r)}<small>${esc(phoneFmt(r.telefono))}</small></div></div>
@@ -454,7 +454,7 @@ function paintTab() {
     const c = d.contacto || r;
     const f = [['Teléfono', phoneFmt(c.telefono)], ['Primer mensaje', c.primero ? longDate(c.primero) : '—'], ['Último mensaje', c.ultimo ? longDate(c.ultimo) : '—'], ['Mensajes', num(c.msgs)], ['Curso', c.curso ? c.curso + (c.curso_detectado ? ' (aprox., detectado por sus mensajes)' : '') : '—'], ['Etapa del agente', ({ nuevo: 'Nuevo', lead: 'Interesado', comprobante_recibido: 'Envió comprobante' })[c.estado] || '—'], ['Comprobante', c.ultimo_comprobante_fecha ? longDate(c.ultimo_comprobante_fecha) + (c.ultimo_monto ? ' · ' + c.ultimo_monto : '') : '—']];
     const ders = d.derivaciones || [];
-    b.innerHTML = `<dl class="facts">${f.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}${c.ultimo_comprobante_link ? `<dt>Imagen</dt><dd><a href="${esc(c.ultimo_comprobante_link)}" target="_blank" rel="noopener">Abrir comprobante</a></dd>` : ''}</dl>
+    b.innerHTML = `<dl class="facts">${f.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}${c.ultimo_comprobante_link ? `<dt>Imagen</dt><dd><button class="linklike" type="button" data-img="${esc(c.ultimo_comprobante_link)}">Ver comprobante</button></dd>` : ''}</dl>
       ${ders.length ? `<h3 class="sub-h">Derivaciones al equipo</h3>${ders.map((x) => `<div class="note"><span>${esc(x.motivo || 'Sin motivo')}</span><small>${esc(longDate(x.created_at))}</small></div>`).join('')}` : ''}`;
   }
 }
@@ -531,7 +531,17 @@ function route() {
   render(); scrollTo({ top: 0 });
 }
 
+/* visor del comprobante: si el link de WhatsApp ya venció, lo explica en vez de abrir una página de error */
+function verImagen(url) {
+  const d = $('#imgDlg'), im = $('#imgDlgImg'), msg = $('#imgDlgMsg'), a = $('#imgDlgOpen');
+  im.hidden = true; a.hidden = true; msg.textContent = 'Cargando imagen…'; msg.className = 'muted';
+  im.onload = () => { im.hidden = false; a.hidden = false; a.href = url; msg.textContent = ''; };
+  im.onerror = () => { msg.className = 'img-gone'; msg.innerHTML = '<b>Esta imagen ya no está disponible.</b> WhatsApp guarda los archivos solo por unos días y este comprobante ya venció. El monto, el concepto y la fecha siguen guardados en el CRM.'; };
+  im.src = url;
+  if (!d.open) d.showModal();
+}
 document.addEventListener('click', (e) => {
+  const iv = e.target.closest('[data-img]'); if (iv) { e.stopPropagation(); verImagen(iv.dataset.img); return; }
   const mk = e.target.closest('[data-mark]');
   if (mk) { e.stopPropagation(); setAtencion(mk.dataset.mark, 'atendido'); return; }
   if (e.target.closest('[data-stop]')) { e.stopPropagation(); return; }
@@ -541,7 +551,7 @@ document.addEventListener('click', (e) => {
   const op = e.target.closest('[data-open]'); if (op && !e.target.closest('a,button.mark')) openDrawer(op.dataset.open, op);
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { if (!pop().hidden) { $('#opCancel').click(); return; } if (D.tel) closeDrawer(); }
+  if (e.key === 'Escape') { if ($('#imgDlg').open) return; if (!pop().hidden) { $('#opCancel').click(); return; } if (D.tel) closeDrawer(); }
   const row = e.target.closest?.('.lrow[data-open]');
   if (row && (e.key === 'Enter' || e.key === ' ') && e.target === row) { e.preventDefault(); openDrawer(row.dataset.open, row); }
 });

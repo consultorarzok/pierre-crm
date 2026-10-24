@@ -69,6 +69,12 @@
     <div class="pop-actions"><button type="button" class="btn ghost sm" id="opCancel">Ahora no</button><button class="btn primary sm" type="submit">Guardar nombre</button></div>
   </form>
 </div>
+<dialog class="img-dlg" id="imgDlg" aria-label="Comprobante de pago">
+  <form method="dialog" class="img-dlg-h"><b>Comprobante de pago</b><button class="icon-btn" aria-label="Cerrar">✕</button></form>
+  <img id="imgDlgImg" alt="Imagen del comprobante" hidden>
+  <p id="imgDlgMsg"></p>
+  <a id="imgDlgOpen" class="btn sm" target="_blank" rel="noopener" hidden>Abrir en otra pestaña</a>
+</dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
